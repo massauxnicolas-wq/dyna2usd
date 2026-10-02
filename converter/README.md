@@ -24,7 +24,7 @@ named `d3plot`, sitting next to `d3plot01`, `d3plot02`, …). lasso globs the re
 py -3.11 converter\d3plot_to_usd_lasso.py resultats\d3plot -o yaris.usdc
 
 :: fast smoke test — first 5 states, first 5 parts
-py -3.11 converter\d3plot_to_usd_lasso.py resultats\d3plot -o t.usdc --states 1:6 --max-parts 5
+py -3.11 converter\d3plot_to_usd_lasso.py resultats\d3plot -o t.usdc --states 1:6 --parts "Hood*,2000*"
 
 :: full-restart chain — base run then restart(s), in order, on one timeline
 py -3.11 converter\d3plot_to_usd_lasso.py resultats\d3plot restart\d3plotac_base -o full.usdc
@@ -53,9 +53,10 @@ id). A single family (one argument) is built flat under `/sim` exactly as before
 | `d3plot` (positional) | — | One or more d3plot family base files, **in restart order**. One = flat under `/sim`; several = a restart chain merged onto one timeline (`/sim/run0`, `/sim/run1`, …). No args = run the self-check. |
 | `-o`, `--out` | `out_lasso.usdc` | Output path. `.usdc` = binary (fast, compact); `.usda` = ASCII (readable, huge). Extension decides the format. **Overwritten if it exists.** |
 | `--states` | all | 1-based **inclusive** slice `LO:HI`, e.g. `1:6` = states 1‑6. Open ends allowed (`:10`, `3:`). Applied **per family**; each family's slice is appended to the shared timeline. |
-| `--max-parts` | all | Keep only the first N parts (in discovery order). Debug/preview knob — **not** a stable selection, order is not part-ID sorted. |
+| `--parts` | all | Comma list of part ids or title patterns (`fnmatch`, case-insensitive) to keep, e.g. `2000*,Hood,1001`. Applies to meshes, beams and SPH. |
+| `--exclude` | none | Same syntax; parts to drop (applied after `--parts`). E.g. `--exclude "HS*"` drops the barrier. |
 | `--fps` | `24.0` | Sets both `timeCodesPerSecond` and `framesPerSecond` on the stage. One state → one frame → one time code. |
-| `--fields` | none | Comma list of result primvars, time-sampled per frame: `von_mises`, `plastic_strain` (per face, `uniform`, max over integration layers) and `displacement` (per vertex, magnitude from the first authored state; also on beams). Blender imports them as attributes → drive colour with an Attribute node. |
+| `--fields` | none | Comma list of result primvars, time-sampled per frame. Shells/solids: `von_mises`, `plastic_strain` (per face, `uniform`, max over integration layers). All geometry: `displacement` (per vertex, magnitude from the first authored state). Beams (per wire node, from the 1-2 touching segments): `von_mises` (√(σ² + 3τ²), max over integration points), `plastic_strain`, `axial_force` (mean, signed) and `axial_work` = real absorbed energy, Σ ½(Fₛ+Fₛ₋₁)(Lₛ−Lₛ₋₁) over every state. Blender imports them as attributes; `blender/field.py` switches between them. Each beam field adds ~0.3 GB on the 1.5M-beam wiremesh. |
 
 ---
 
@@ -192,9 +193,9 @@ with `stage.Export(out)`. `CreateNew` + `Save()` produced the identical file but
 These are deliberate, marked in-code, and worth knowing before you trust or extend
 the output:
 
-- **Solids emit all 6 hex faces**, not just the exterior surface. Simpler and correct,
-  but interior faces between adjacent solids are redundant. If solid-heavy models blow
-  up in size, exterior-only face extraction is the upgrade path.
+- **Exterior faces only for solids** (`interior_faces`): a hex face shared by two
+  elements is dropped (car: 105k faces), unless one owner erodes, then it is kept so the
+  face appears when the neighbour dies (shown with its own element's erosion).
 - **Beams are typed under `/sim/beams`** via an explicit `Xform.Define`. A plain
   `Define()` would create the parent typeless, and Blender's importer **drops typeless
   prims** — the curves would then lose `/sim`'s 1e-3 scale and come in 1000× too big.
@@ -260,7 +261,7 @@ Watch for:
 
 The converter is the thing to harden before building on it. Suggested checks:
 
-1. **Round-trip a small slice** (`--states 1:3 --max-parts 3 -o t.usda`) and open the
+1. **Round-trip a small slice** (`--states 1:3 --parts "2000*" -o t.usda`) and open the
    ASCII `.usda` — eyeball prim structure, time samples, scale op.
 2. **Open in usdview / Blender** — confirm animation plays, model is ~metres, parts
    are colored and lit.

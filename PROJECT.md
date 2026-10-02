@@ -42,10 +42,13 @@ into one mesh made eval single-threaded (171 ms) — no gain, rejected.
 
 ### Converter
 - [x] Result fields as primvars (`--fields von_mises,plastic_strain,displacement`).
-- [ ] Beam element results (axial force/stress) as per-vertex primvars.
-- [ ] Blender: colour-by-result material (Attribute → Color Ramp) with fixed legend range.
-- [ ] Exterior-only faces for solids (currently all 6 hex faces → interior duplicates).
-- [ ] Part selection by id / name filter (replace the debug-only `--max-parts`).
+- [x] Beam results per wire node: `von_mises`, `plastic_strain`, `axial_force`,
+      `axial_work` (real absorbed energy, cumulative F·dL).
+- [ ] Bending/torsion work for beams (needs moments + rotations).
+- [x] Blender: colour-by-result (`--color-by`), switchable field (Dyna Field GN modifier
+      driven by scene props), fixed or percentile legend range, log scale.
+- [x] Exterior-only faces for solids (shared hex faces dropped unless an owner erodes).
+- [x] Part selection by id / name pattern: `--parts`, `--exclude` (replaced `--max-parts`).
 - [ ] Proper `pip install` package + CLI entry point (`dyna2usd ...`).
 - [ ] Round-trip tests on a small public d3plot.
 
@@ -62,6 +65,8 @@ into one mesh made eval single-threaded (171 ms) — no gain, rejected.
 - [ ] Camera rigs: turntable, impact close-up; HDRI option for studio.
 - [x] Beam radius: "Dyna Beam" node group + built-in Curve to Tube (off by default);
       scene curve display fixed so radius shows in EEVEE/viewport.
+- [x] Wire energy proxy (`blender/wire_energy.py`, strain / velocity) for models without
+      beam results.
 - [ ] SPH point radius setup.
 - [ ] Optimisation: decimate / hide internal parts, instance static parts, smooth
       shading + auto-smooth, mesh cache (Alembic / USD) streaming for big models.

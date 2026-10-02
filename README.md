@@ -26,10 +26,10 @@ pip install lasso-python usd-core numpy
 py -3.11 converter\d3plot_to_usd_lasso.py <path\d3plot> -o crash.usdc
 
 :: fast smoke test — states 1-6, first 5 parts
-py -3.11 converter\d3plot_to_usd_lasso.py <path\d3plot> -o t.usdc --states 1:6 --max-parts 5
+py -3.11 converter\d3plot_to_usd_lasso.py <path\d3plot> -o t.usdc --states 1:6 --parts "2000*" --exclude "HS*"
 
 :: with result fields for colour-by-result renders
-py -3.11 converter\d3plot_to_usd_lasso.py <path\d3plot> -o crash.usdc --fields von_mises,plastic_strain,displacement
+py -3.11 converter\d3plot_to_usd_lasso.py <path\d3plot> -o crash.usdc --fields von_mises,plastic_strain,displacement,axial_force,axial_work
 
 :: full-restart chain merged on one timeline
 py -3.11 converter\d3plot_to_usd_lasso.py run\d3plot restart\d3plot -o full.usdc
@@ -57,6 +57,27 @@ Imports the stage (frame range from the file) and sets up the beams:
 - `--fields` results arrive as attributes (`von_mises`, `plastic_strain` per face,
   `displacement` per point) for an Attribute node → Color Ramp material.
 - Motion blur works out of the box in Cycles (Blender samples the USD between frames).
+
+### Switching the result field
+
+Looks colour through a **Dyna Field** geometry-nodes modifier (`blender/field.py`): a menu
+picks the field, Min/Max (and Log) normalise it into `fe_value`, which the materials read.
+Every modifier is driven by scene props, so one change switches the whole model:
+
+- Properties › Scene › Custom Properties: `fe_field` (0 von_mises, 1 plastic_strain,
+  2 displacement, 3 axial_force, 4 axial_work), `fe_min`, `fe_max`, `fe_log`.
+- Or, to also recompute the range and relabel the legend, in the Python console:
+  `import field; field.set_field(C.scene, "plastic_strain")`
+
+Studio colour-by-result: `look.py --look studio --color-by plastic_strain`.
+`axial_work` defaults to a 3-decade log legend (`--scale linear|log` overrides): beam energy
+is heavy-tailed (median 0.01, max 2.7e5 on the wiremesh), linear shows it all blue.
+
+### Wire energy proxy
+
+`blender/wire_energy.py --mode strain|velocity` colours wires by a geometry-only estimate
+(plastic stretch or peak node speed, max-held in a simulation zone) when the model was
+converted without beam results. With `--fields axial_work`, prefer the real energy.
 
 ### Looks
 

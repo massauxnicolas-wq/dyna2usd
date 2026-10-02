@@ -7,10 +7,14 @@
 
 Looks (add one = write build_<name>(ctx, args) and register it in LOOKS):
   studio  photoreal product shot: cyclorama, 3 area lights, satin part colours,
-          metal for rigid parts and beams, Cycles + AgX.
+          metal for rigid parts and beams, Cycles + AgX. --color-by <field>: satin
+          colour-by-result (same JET9 bands + legend as fe).
   fe      LS-PrePost style (FE look guidelines): flat emissive banded JET9 fringe on
           one result field, headlight + AO shade, element lines, grey rigid parts,
           grey studio gradient, stepped legend.
+
+Result colours go through field.py's "Dyna Field" modifier (attribute fe_value), so the
+field can be switched later for every object from the scene props / field.set_field().
 
 Shared base: imported USD lights removed, camera framed on the union of the model's
 bounds over the whole animation, rigid parts detected from the data (edge lengths
@@ -30,11 +34,9 @@ from mathutils import Matrix, Vector
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dyna_import  # noqa: E402
+import field  # noqa: E402
 
 COLL = "dyna_look"
-FIELD_UNITS = {"von_mises": "Von Mises stress [MPa]",
-               "plastic_strain": "Effective plastic strain [-]",
-               "displacement": "Displacement [mm]"}
 # FE look guidelines §2: 9 constant bands, legend shows the same 9 colours
 JET9 = [(0, 0, 1), (0, .35, 1), (0, .75, 1), (0, 1, .65), (0, 1, 0),
         (.6, 1, 0), (1, 1, 0), (1, .5, 0), (1, 0, 0)]
@@ -45,17 +47,8 @@ VIEWS = {"iso": (1, -1, .6), "iso2": (-1, -1, .6), "+x": (1, 0, .15), "-x": (-1,
 
 
 # ---------------------------------------------------------------- pure helpers
-def nice_ceil(v):
-    """Round a legend max up to a clean number: 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8 x 10^n."""
-    if v <= 0:
-        return 1.0
-    e = 10 ** math.floor(math.log10(v))
-    return next(m * e for m in (1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10) if m * e >= v * (1 - 1e-9))
-
-
-def ticks(vmax, n=9):
-    """n+1 legend values at the band edges."""
-    return [vmax * i / n for i in range(n + 1)]
+nice_ceil = field.nice_ceil
+ticks = field.legend_values
 
 
 def deforms(p0, p1, edges, tol=1e-5):
@@ -236,27 +229,6 @@ class Ctx:
         print(f"look: {len(self.meshes)} meshes ({len(self.rigid)} rigid), {len(self.curves)} beam "
               f"objects, size {self.diag:.2f} m, median element {self.elem:.2f} (local units)")
 
-    def field_max(self, field, pct=100.0):
-        """pct-th percentile of a field over the animation, deforming objects only
-        (100 = true max; lower keeps a few hot elements from washing out the fringe)."""
-        vals, found = [], False
-        for f in frames(self.scene, 2):
-            self.scene.frame_set(f)
-            dg = bpy.context.evaluated_depsgraph_get()
-            for o in self.meshes + self.curves:
-                if o.name in self.rigid:
-                    continue
-                v = eval_attr(o, dg, field)
-                if v is not None and len(v):
-                    found = True
-                    vals.append(v)
-        self.scene.frame_set(self.scene.frame_start)
-        assert found, (f"no '{field}' attribute on the model: re-convert with "
-                       f"--fields {field} (converter/d3plot_to_usd_lasso.py)")
-        vals = np.concatenate(vals)
-        print(f"look: {field} max {vals.max():.4g}, p{pct:g} {np.percentile(vals, pct):.4g}")
-        return float(np.percentile(vals, pct))
-
 
 def base_scene(ctx, args):
     sc = ctx.scene
@@ -386,6 +358,19 @@ def build_studio(ctx, args):
         assign(o, m)
     for o in ctx.curves:
         assign(o, steel)
+    if args.color_by:
+        objs, _, vmin, vmax = setup_field(ctx, args, args.color_by)
+        m, nt = new_material("dyna_result")
+        bs = node(nt, "ShaderNodeBsdfPrincipled")
+        link(nt, ramp(nt, fe_value(nt), JET9), bs.inputs["Base Color"])
+        bs.inputs["Roughness"].default_value = .38
+        bs.inputs["Coat Weight"].default_value = .4
+        bs.inputs["Coat Roughness"].default_value = .08
+        link(nt, bs.outputs[0], node(nt, "ShaderNodeOutputMaterial").inputs["Surface"])
+        for o in objs:
+            assign(o, m)
+        if args.legend:
+            fe_legend(ctx, args, vmin, vmax, args.color_by)
     sc.view_settings.view_transform = "AgX"
     try:
         sc.view_settings.look = "AgX - Medium High Contrast"
@@ -397,9 +382,7 @@ def build_studio(ctx, args):
 def fe_material(ctx, args):
     """FE_Look: Emission(mix(part colours, JET9 fringe, fe_stress) x headlight shade)."""
     m, nt = new_material("FE_Look")
-    v = node(nt, "ShaderNodeAttribute", attribute_type="GEOMETRY", attribute_name=args.field)
-    fac = math_node(nt, "DIVIDE", v.outputs["Factor"], scene_prop(nt, "fe_max"), clamp=True)
-    fac = math_node(nt, "MINIMUM", fac, 0.9999)          # top edge stays in the red band
+    fac = fe_value(nt)
     fringe = ramp(nt, fac, JET9)
     part = ramp(nt, node(nt, "ShaderNodeObjectInfo").outputs["Random"], PASTEL10)
     mix = node(nt, "ShaderNodeMix", data_type="RGBA")
@@ -413,6 +396,12 @@ def fe_material(ctx, args):
     link(nt, shade, sock(col.inputs, "B", "RGBA"))
     emission_out(nt, col.outputs[2])
     return m
+
+
+def fe_value(nt):
+    """Normalised result (Dyna Field modifier), top edge kept inside the red band."""
+    v = node(nt, "ShaderNodeAttribute", attribute_type="GEOMETRY", attribute_name="fe_value")
+    return math_node(nt, "MINIMUM", v.outputs["Factor"], 0.9999)
 
 
 def fe_shade(nt, ao_dist):
@@ -522,7 +511,7 @@ def flat_emission(name, rgb, alpha=1.0):
     return m
 
 
-def fe_legend(ctx, args, vmax):
+def fe_legend(ctx, args, vmin, vmax, fld):
     """Stepped JET9 bar + 10 edge values + title on a 60 % light panel, parented to
     the camera on the right side of frame.
     ponytail: in-scene, no DOF; a separate HUD scene (guidelines §6) when DOF is needed."""
@@ -545,7 +534,7 @@ def fe_legend(ctx, args, vmax):
         assign(ob, mat)
         return ob
 
-    def text(name, body, x, y, size, align="LEFT"):
+    def text(name, body, x, y, size, align="LEFT"):  # returns the object
         cu = bpy.data.curves.new(name, "FONT")
         cu.body, cu.size, cu.align_x, cu.align_y = body, size, align, "CENTER"
         ob = bpy.data.objects.new(name, cu)
@@ -553,34 +542,62 @@ def fe_legend(ctx, args, vmax):
         ob.parent = cam
         ob.location = (x, y, -d + 1e-4 * d)
         assign(ob, ink)
+        return ob
 
     for i, c in enumerate(JET9):
         plane(f"FE_band_{i}", x0, y0 + bar_h * i / 9, bar_w, bar_h / 9, flat_emission(f"FE_jet_{i}", c))
-    for i, val in enumerate(ticks(vmax)):
+    for i, val in enumerate(ticks(vmin, vmax, log=getattr(ctx, "log", False))):
         text(f"FE_tick_{i}", f"{val:.4g}", x0 + bar_w * 1.25, y0 + bar_h * i / 9, txt_h)
-    text("FE_title", args.title or FIELD_UNITS[args.field], x0 + bar_w * 3, y0 + bar_h + txt_h * 2.2,
-         txt_h * 1.1, "RIGHT")
+    title = text("FE_title", args.title or field.TITLES[fld], x0 + bar_w * 3,
+                 y0 + bar_h + txt_h * 2.2, txt_h * 1.1, "RIGHT")
+    bpy.context.view_layer.update()                          # text dimensions need an eval
     pad = txt_h
-    plane("FE_panel", x0 - pad * 7.5, y0 - pad * 1.5, half_w - x0 + pad * 7.4, bar_h + pad * 5,
+    left = min(x0 - pad * 7.5, x0 + bar_w * 3 - title.dimensions.x - pad)
+    plane("FE_panel", left, y0 - pad * 1.5, half_w - left - pad * .1, bar_h + pad * 5,
           flat_emission("FE_Panel", (.82, .83, .85), alpha=.6), z=-1e-4 * d)
+    cam.data.shift_x = .09                                   # model left of the legend panel
+
+
+def result_objects(ctx, fld):
+    """(objects carrying the field and deforming, the rest) at the first frame."""
+    dg = bpy.context.evaluated_depsgraph_get()
+    has, rest = [], []
+    for o in ctx.meshes + ctx.curves:
+        ok = o.name not in ctx.rigid and o.evaluated_get(dg).data.attributes.get(fld) is not None
+        (has if ok else rest).append(o)
+    return has, rest
+
+
+def setup_field(ctx, args, fld):
+    """Dyna Field modifiers on result objects + legend range -> (objs, rest, vmin, vmax)."""
+    objs, rest = result_objects(ctx, fld)
+    assert objs, (f"no deforming object carries '{fld}': re-convert with --fields {fld} "
+                  "(converter/d3plot_to_usd_lasso.py)")
+    for o in objs:
+        field.add_field_modifier(o, ctx.scene)
+    vmin = vmax = None
+    log = fld in field.LOG if args.scale == "auto" else args.scale == "log"
+    if args.legend_max:
+        vmax = args.legend_max
+        vmin = vmax / 10 ** field.DECADES if log else (-vmax if fld in field.SIGNED else 0.0)
+    vmin, vmax = field.set_field(ctx.scene, fld, vmin, vmax, args.legend_pct, objs, log)
+    ctx.log = log
+    return objs, rest, vmin, vmax
 
 
 def build_fe(ctx, args):
     sc = ctx.scene
-    vmax = args.legend_max or nice_ceil(ctx.field_max(args.field, args.legend_pct))
-    sc["fe_max"], sc["fe_stress"] = vmax, 1.0                # fe_stress 0 = part colours, key it
+    objs, rest, vmin, vmax = setup_field(ctx, args, args.field)
+    sc["fe_stress"] = 1.0                                    # 0 = part colours, key it
     fe = fe_material(ctx, args)
     rigid = fe_rigid_material()
     line_mat = flat_emission("FE_Line", (.02, .02, .025))
     radius = {"off": None, "auto": line_radius(ctx.elem, ctx.px),
               "on": max(ctx.elem / 40, .5 * ctx.px)}[args.lines]
     lines = fe_lines_group(line_mat) if radius else None
-    dg = bpy.context.evaluated_depsgraph_get()
-    for o in ctx.meshes + ctx.curves:
-        has = o.evaluated_get(dg).data.attributes.get(args.field) is not None
-        if o.name in ctx.rigid or not has:
-            assign(o, rigid)
-            continue
+    for o in rest:
+        assign(o, rigid)
+    for o in objs:
         assign(o, fe)
         if lines and o.type == "MESH":
             mod = o.modifiers.get("FE_Lines") or o.modifiers.new("FE_Lines", "NODES")
@@ -591,9 +608,8 @@ def build_fe(ctx, args):
     sc.view_settings.view_transform = "Standard"             # emission colours exact, no tonemap
     sc.view_settings.look = "None"
     if args.legend:
-        fe_legend(ctx, args, vmax)
-        ctx.cam.data.shift_x = .09                           # model left of the legend panel
-    print(f"look fe: field {args.field}, legend max {vmax:g}, element lines "
+        fe_legend(ctx, args, vmin, vmax, args.field)
+    print(f"look fe: field {args.field}, legend {vmin:g}..{vmax:g}, element lines "
           f"{'radius %.3g (local units)' % radius if radius else 'off (elements < 4 px or --lines off)'}")
 
 
@@ -604,11 +620,15 @@ def parse(argv):
     ap = argparse.ArgumentParser(prog="look.py")
     ap.add_argument("--usd", help="import this dyna2usd .usdc first (else use the open .blend)")
     ap.add_argument("--look", choices=LOOKS, default="studio")
-    ap.add_argument("--field", choices=list(FIELD_UNITS), default="von_mises", help="fe: fringe field")
-    ap.add_argument("--legend-max", type=float, help="fe: legend max (default: clean max over animation)")
+    ap.add_argument("--field", choices=field.FIELDS, default="von_mises", help="fe: fringe field")
+    ap.add_argument("--color-by", choices=field.FIELDS, help="studio: colour-by-result field")
+    ap.add_argument("--legend-max", type=float,
+                    help="fixed legend max (signed fields: symmetric -max..max)")
     ap.add_argument("--legend-pct", type=float, default=99.5,
                     help="fe: legend max = this percentile over the animation, rounded up "
                          "(100 = true max; values above show red)")
+    ap.add_argument("--scale", choices=["auto", "linear", "log"], default="auto",
+                    help=f"legend scale (auto: log for {sorted(field.LOG)}, {field.DECADES} decades)")
     ap.add_argument("--title", help="fe: legend title (default: field name + units)")
     ap.add_argument("--no-legend", dest="legend", action="store_false")
     ap.add_argument("--lines", choices=["auto", "on", "off"], default="auto",
@@ -657,11 +677,12 @@ def main(argv):
 
 def _selfcheck():
     assert nice_ceil(1.45e3) == 1500 and nice_ceil(0.806) == 1 and nice_ceil(212) == 250
+    assert ticks(-50, 40)[0] == -50 and ticks(-50, 40)[-1] == 40
     assert nice_ceil(410) == 500 and nice_ceil(500) == 500 and nice_ceil(0.031) == 0.04
     dd = frame_distance(Vector((-1, -1, -1)), Vector((1, 1, 1)), Vector(), Vector((0, 0, 1)),
                         Vector((1, 0, 0)), Vector((0, 1, 0)), 1.0, 0.5)
     assert abs(dd - 3.0) < 1e-9                    # near face z=1 + |y|=1 / tan 0.5
-    t = ticks(900)
+    t = ticks(0, 900)
     assert len(t) == 10 and t[0] == 0 and t[-1] == 900 and t[1] == 100
     sq = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], float)
     e = np.array([[0, 1], [1, 2], [2, 3], [3, 0]])

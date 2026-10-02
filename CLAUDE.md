@@ -39,6 +39,12 @@ Test data: `data\d3plot_car\d3plot`, `data\d3plot_wiremesh\d3plot`.
   exactly 0; elastic car parts are 1e-4..1e-2 and must keep their fringe). Framing uses
   deforming parts only (sim grounds/rails can be 50-100 m). FE legend max = clean-rounded
   99.5th percentile: the true max (one hot element) turns the whole fringe blue.
+- Dyna Field menu: rename the Menu Switch's 2 default items, never clear them — menu
+  values are internal ids that are not reused (clearing shifts every field to id+2).
+- Drivers: create the scene props before the drivers (a driver on a missing prop stays
+  invalid until reload), keep expressions plain `v` (simple expressions run without
+  Python auto-run), and after editing props from Python call scene.update_tag() +
+  view_layer.update().
 - Check every look change by rendering a 960x540 still and looking at it.
 - Viewport playback is bound by Blender redrawing deforming meshes (~200 ns/tri), not
   by USD reading. Merging parts into one mesh was tested and is slower (single-thread
