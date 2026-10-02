@@ -1,0 +1,9 @@
+data/
+*.usd
+*.usda
+*.usdc
+*.usdz
+__pycache__/
+*.pyc
+.claude/settings.local.json
+*.blend1
