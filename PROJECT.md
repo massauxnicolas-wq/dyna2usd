@@ -23,6 +23,21 @@ d3plot ──converter──► animated .usdc ──► Blender import ──�
 - **Dropped:** web viewer (Needle WASM) and Gaussian-splat experiments — off-goal,
   removed from the repo.
 
+## Benchmarks (2026-10-02, 16 cores, RTX A4000, Blender 5.1.2)
+
+| | car (1.25M tris, 929 parts, 5.6k beams) | wiremesh (570k tris, 1.56M beams) |
+|---|---|---|
+| Convert (50 states) | 85 s → **18 s** (in-memory save) | 61 s → **40 s** (+ beam chains) |
+| Output size | 0.35 GB | 1.95 → **1.01 GB** |
+| Peak RAM (convert) | 5.9 GB | 14.6 GB (lasso loads all states) |
+| Blender import | 0.8 s | 0.1 s |
+| Blender eval / frame | 42 ms | 13 ms (native beams) |
+| Viewport playback OpenGL → Vulkan | 4.2 → 5.3 fps | 11.1 → 19.0 fps |
+
+Playback is limited by Blender redrawing deforming meshes, not by USD: plain spheres
+with a Displace modifier (930 obj, 1.2M tris) play at the same ~5 fps. Merging parts
+into one mesh made eval single-threaded (171 ms) — no gain, rejected.
+
 ## Roadmap
 
 ### Converter
@@ -34,12 +49,13 @@ d3plot ──converter──► animated .usdc ──► Blender import ──�
 - [ ] Round-trip tests on a small public d3plot.
 
 ### Blender toolbox
-- [ ] Import helper: USD import with the right options, frame range & fps from the stage.
+- [x] Import helper (`blender/dyna_import.py`): USD import, frame range from the stage.
 - [ ] Material library: car paint, glass, rubber, metal, plastic — assign by part name
       rules (regex → material), config file per model.
 - [ ] Studio deck: cyclorama / infinite floor, HDRI + 3-point lights, camera rigs
       (turntable, impact close-up, side/top), one-click scene build.
-- [ ] Beam thickness (geometry nodes / curve bevel) and SPH point radius setup.
+- [x] Beam radius: "Dyna Beam" node group, native curves or tube mesh.
+- [ ] SPH point radius setup.
 - [ ] Optimisation: decimate / hide internal parts, instance static parts, smooth
       shading + auto-smooth, mesh cache (Alembic / USD) streaming for big models.
 - [ ] Render presets: Cycles photoreal vs EEVEE preview, denoise, sampling, output paths;

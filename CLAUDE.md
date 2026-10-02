@@ -10,13 +10,14 @@ converter internals.
 - Blender scripts run inside Blender's own Python (`bpy`), not `py -3.11`.
 
 ## Layout
-`converter/` (d3plot → animated USD, the core) · `data/` (14 GB test results, **never
+`converter/` (d3plot → animated USD, the core) · `blender/` (bpy scripts, Blender 5.1) · `data/` (14 GB test results, **never
 commit**, gitignored).
 
 ## Commands
 ```
 py -3.11 converter\d3plot_to_usd_lasso.py <path\d3plot> -o out.usdc
 py -3.11 converter\d3plot_to_usd_lasso.py                 # self-check, must print "selfcheck ok"
+"C:\Program Files\Blender Foundation\Blender 5.1blender.exe" -b --factory-startup --python blender\dyna_import.py   # "blender selfcheck ok"
 ```
 Test data: `data\d3plot_car\d3plot`, `data\d3plot_wiremesh\d3plot`.
 
@@ -29,3 +30,8 @@ Test data: `data\d3plot_car\d3plot`, `data\d3plot_wiremesh\d3plot`.
 - Part colours seeded by part key — must stay stable across runs/restart families.
 - Erosion: skip (with a printed note) on shape mismatch, never guess the mapping.
 - Run the self-check after any converter change.
+- Blender 5.1 `Curve to Mesh` does NOT scale the profile by curve radius by itself:
+  the `Radius` field node must feed its `Scale` input.
+- Viewport playback is bound by Blender redrawing deforming meshes (~200 ns/tri), not
+  by USD reading. Merging parts into one mesh was tested and is slower (single-thread
+  eval) — don't retry it.

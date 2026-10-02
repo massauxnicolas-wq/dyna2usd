@@ -84,7 +84,7 @@ A single stage, Z-up, seconds-based timeline:
 │                                     points (+ extent) time-sampled every frame.
 │                                     Eroding parts also time-sample topology.
 ├── /sim/beams              Xform  ← typed on purpose (see §6, "beams").
-│   └── /sim/beams/<PartTitle>  BasisCurves (linear)  ← beam elements, 2 verts/seg.
+│   └── /sim/beams/<PartTitle>  BasisCurves (linear)  ← beams joined into polylines.
 ├── /sim/sph                Xform  ← typed on purpose (see §6, "beams").
 │   └── /sim/sph/<PartTitle>   Points  ← SPH particles. points + widths time-sampled.
 ├── /sim/materials/mat_<pid>   Material  ← UsdPreviewSurface, matte plastic.
@@ -168,11 +168,17 @@ For each selected state → frame:
   per-frame `extent` (local bbox). Eroding parts additionally rebuild
   `faceVertexCounts`/`faceVertexIndices` from the live faces only (with an assert that
   counts and indices stay consistent).
-- **Beams:** points listed per segment (BasisCurves has no index array — segments are
-  consumed by the vertex counts). Eroding beam parts also re-author their counts.
+- **Beams:** segments sharing a node are joined once into polylines (`beam_chains`:
+  walk from every end/junction node, then closed loops) — an exact topological merge
+  on node ids, no distance threshold. Each frame lists the chain nodes' positions.
+  Eroding parts re-cut the chains per frame (`live_curves`): a dead segment splits its
+  curve, 1-point leftovers drop. Wiremesh: 1.56M beams → 10k curves, file 1.95 → 1.01
+  GB, frame writing 32 → 15 s.
 
 ### 5.6 Save
-`stage.GetRootLayer().Save()`.
+The stage is authored **in memory** (`Usd.Stage.CreateInMemory()`) and written once
+with `stage.Export(out)`. `CreateNew` + `Save()` produced the identical file but was
+~40× slower on many-prim stages (car: 66 s → 1.6 s).
 
 ---
 
@@ -187,8 +193,8 @@ the output:
 - **Beams are typed under `/sim/beams`** via an explicit `Xform.Define`. A plain
   `Define()` would create the parent typeless, and Blender's importer **drops typeless
   prims** — the curves would then lose `/sim`'s 1e-3 scale and come in 1000× too big.
-- **Beam widths** are a constant `1.0` (= 1 mm pre-scale) primvar, meant to be
-  overridden by a thickness modifier in the rendering software.
+- **Beam widths** are a constant `1.0` (= 1 mm pre-scale) primvar, overridden in
+  Blender by the "Dyna Beam" node group's Radius (`blender/dyna_import.py`).
 - **Light intensities** are eyeballed for usdview/Blender and may need tuning per
   renderer.
 - **Beam orientation nodes ignored** — only the two end nodes (cols 0,1) of each beam
@@ -213,7 +219,7 @@ A healthy run prints, in order:
 lasso: <n> shells, <n> solids, <n> tshells, <n> parts, <n> states
 has_element_deletion_data=<bool>  has_node_deletion_data=<bool>
 built <n> part meshes
-built <n> beam curve prims (<n> beams)
+built <n> beam curve prims (<n> beams -> <n> curves)
 [t] geometry processed in …s
   frame 0 (state 0) done in …s
   …

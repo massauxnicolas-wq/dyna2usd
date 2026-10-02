@@ -11,7 +11,8 @@ beams and SPH — then a Blender toolbox to light, shade, optimise and render th
 | Piece | State |
 |-------|-------|
 | `converter/d3plot_to_usd_lasso.py` — d3plot → animated USD | **working** |
-| Blender toolbox (scene setup, materials, optimisation, render decks) | planned — see `PROJECT.md` |
+| `blender/dyna_import.py` — import + beam radius node group | **working** |
+| Blender toolbox (materials, studio deck, render presets) | planned — see `PROJECT.md` |
 
 ## Quick start
 
@@ -33,7 +34,19 @@ py -3.11 converter\d3plot_to_usd_lasso.py run\d3plot restart\d3plot -o full.usdc
 py -3.11 converter\d3plot_to_usd_lasso.py
 ```
 
-Then in Blender: **File → Import → Universal Scene Description** and play the timeline.
+Then into Blender 5.1+:
+
+```bat
+blender --python blender\dyna_import.py -- crash.usdc [radius_mm]
+```
+
+Imports the stage (frame range from the file) and gives every beam object a
+**Dyna Beam** geometry-nodes modifier: `Radius` (mm) drives the curve radius;
+native curves by default (Cycles renders round tubes), `Tube Mesh` toggles real
+geometry. Change all beams at once: select them, Alt+Enter on Radius.
+
+**Playback tip:** use the Vulkan backend (Preferences → System → Backend), measured
++25–70 % viewport fps on deforming crash meshes.
 
 Full conversion doc (output layout, erosion, beams, SPH, restarts): [`converter/README.md`](converter/README.md).
 
@@ -41,6 +54,7 @@ Full conversion doc (output layout, erosion, beams, SPH, restarts): [`converter/
 
 ```
 converter/   d3plot → animated USD (the core)
+blender/     Blender-side scripts (import, beams)
 data/        local test results & outputs (not versioned)
 PROJECT.md   goal, decisions, roadmap
 ```

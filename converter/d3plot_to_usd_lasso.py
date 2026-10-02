@@ -158,6 +158,55 @@ def sph_widths(srad, kind, s, sub):
     return (2.0 * np.asarray(w)).astype(np.float32)
 
 
+def beam_chains(pairs):
+    """Join beam segments that share nodes into polylines (exact topological merge on
+    node ids, no distance threshold). Walks from every end/junction node (degree != 2),
+    then picks up leftover closed loops. Returns flat int arrays (nodes, seg):
+    seg[i] = segment linking nodes[i] -> nodes[i+1], -1 at each chain's last node.
+    ponytail: pure-Python walk, ~2 s per 1M segments; numba if it ever matters."""
+    adj = defaultdict(list)
+    for s, (a, b) in enumerate(pairs.tolist()):
+        adj[a].append((b, s)); adj[b].append((a, s))
+    used = bytearray(len(pairs))
+    nodes, seg = [], []
+
+    def walk(n, s):
+        nodes.append(n)
+        while True:
+            used[s] = 1
+            a, b = pairs[s]
+            n = int(b) if a == n else int(a)
+            seg.append(s); nodes.append(n)
+            if len(adj[n]) != 2:
+                break                                        # end or junction
+            s = next((t for _, t in adj[n] if not used[t]), None)
+            if s is None:
+                break                                        # closed loop back at start
+        seg.append(-1)
+
+    for n, nb in adj.items():
+        if len(nb) != 2:
+            for _, s in nb:
+                if not used[s]:
+                    walk(n, s)
+    for s in range(len(pairs)):                              # pure loops: no end nodes
+        if not used[s]:
+            walk(int(pairs[s][0]), s)
+    return np.array(nodes, dtype=np.int64), np.array(seg, dtype=np.int64)
+
+
+def live_curves(seg, alive=None):
+    """Curves surviving erosion: alive[seg] False cuts the chain there. Returns
+    (keep mask over chain nodes, per-curve vertex counts); 1-node leftovers dropped."""
+    link = seg >= 0
+    if alive is not None:
+        link &= alive[np.maximum(seg, 0)]
+    prev = np.r_[False, link[:-1]]
+    keep = link | prev                                       # node touches a live link
+    run = np.cumsum(keep & ~prev)[keep]                      # run id per kept node
+    return keep, np.bincount(run)[1:].astype(np.int32)
+
+
 def parse_states(spec, n):
     if not spec:
         return list(range(n))
@@ -260,8 +309,9 @@ def build_family(stage, path, scope, frame0, states_spec=None, max_parts=None):
     print(f"built {len(built)} part meshes")
 
     # beams -> linear BasisCurves, one prim per part under /sim/beams/part_<pid>.
-    # widths is a constant primvar (1 mm pre-scale) meant to be overridden by a
-    # thickness modifier in the rendering software.
+    # Segments sharing nodes are joined into polylines (beam_chains): no duplicated
+    # points, continuous wires. widths is a constant primvar (1 mm pre-scale) meant
+    # to be overridden by the radius input of the Blender beam node group.
     beams_built = []
     beam_alive = None
     bconn = arr.get(AT.element_beam_node_indexes)
@@ -279,6 +329,7 @@ def build_family(stage, path, scope, frame0, states_spec=None, max_parts=None):
         # Blender's importer drops typeless prims -> children lose /sim's 1e-3 scale
         UsdGeom.Xform.Define(stage, f"{scope}/beams")
         bgroups = defaultdict(lambda: {"pairs": [], "idx": []})
+        n_curves = 0
         for e in range(bconn.shape[0]):
             pid = int(part_ids[bpidx[e]])
             n1, n2 = int(bconn[e, 0]), int(bconn[e, 1])      # cols 2+ = orientation nodes
@@ -297,14 +348,18 @@ def build_family(stage, path, scope, frame0, states_spec=None, max_parts=None):
             c.CreateDisplayColorAttr([rgb])
             UsdShade.MaterialBindingAPI.Apply(c.GetPrim()).Bind(
                 make_material(stage, scope, f"beam_{pid}", rgb))
+            nodes, seg = beam_chains(pairs)
+            keep, counts = live_curves(seg)
             # default counts + points always authored: importers that read
             # default-time topology (Blender curves) need them; per-frame time
-            # samples override both during playback
-            c.CreateCurveVertexCountsAttr(Vt.IntArray([2] * len(pairs)))
+            # samples override points (and counts, if eroding) during playback
+            c.CreateCurveVertexCountsAttr(Vt.IntArray.FromNumpy(counts))
             c.CreatePointsAttr(Vt.Vec3fArray.FromNumpy(
-                coord_states[states[0]][pairs.ravel()].astype(np.float32)))
-            beams_built.append(dict(curve=c, pairs=pairs, idx=idx, erodes=erodes))
-        print(f"built {len(beams_built)} beam curve prims ({bconn.shape[0]} beams)")
+                coord_states[states[0]][nodes].astype(np.float32)))
+            beams_built.append(dict(curve=c, nodes=nodes, seg=seg, idx=idx, erodes=erodes))
+            n_curves += len(counts)
+        print(f"built {len(beams_built)} beam curve prims ({bconn.shape[0]} beams "
+              f"-> {n_curves} curves)")
 
     # SPH particles -> UsdGeom.Points, one prim per part under /sim/sph/part_<pid>.
     # widths = 2*sph_radius: USD width is a DIAMETER, and Blender imports width/2 as
@@ -391,12 +446,13 @@ def build_family(stage, path, scope, frame0, states_spec=None, max_parts=None):
                 b["mesh"].GetFaceVertexCountsAttr().Set(Vt.IntArray.FromNumpy(np.array(counts, np.int32)), tc)
                 b["mesh"].GetFaceVertexIndicesAttr().Set(Vt.IntArray.FromNumpy(np.array(flat, np.int32)), tc)
         for b in beams_built:
-            pairs = b["pairs"]
+            nodes = b["nodes"]
             if b["erodes"]:
-                pairs = pairs[beam_alive[s, b["idx"]]]
-                b["curve"].GetCurveVertexCountsAttr().Set(Vt.IntArray([2] * len(pairs)), tc)
-            # BasisCurves has no index array: points listed per segment, consumed by counts
-            pts = pts_all[pairs.ravel()]
+                keep, counts = live_curves(b["seg"], beam_alive[s, b["idx"]])
+                nodes = nodes[keep]
+                b["curve"].GetCurveVertexCountsAttr().Set(Vt.IntArray.FromNumpy(counts), tc)
+            # BasisCurves has no index array: points listed per curve, consumed by counts
+            pts = pts_all[nodes]
             b["curve"].GetPointsAttr().Set(Vt.Vec3fArray.FromNumpy(pts), tc)
             if len(pts):
                 ext = np.array([pts.min(0), pts.max(0)], dtype=np.float32)
@@ -427,9 +483,9 @@ def convert(inputs, out, states_spec=None, max_parts=None, fps=24.0):
     if isinstance(inputs, str):
         inputs = [inputs]
     check_paths(inputs, out)          # fail fast on bad in/out paths before CreateNew + load
-    if os.path.exists(out):
-        os.remove(out)                                       # CreateNew won't overwrite
-    stage = Usd.Stage.CreateNew(out)
+    # author in memory, write once at the end: CreateNew+Save was 40x slower on
+    # many-prim stages (car: 66 s vs 1.6 s save, identical output)
+    stage = Usd.Stage.CreateInMemory()
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)                # 1e-3 baked on /sim below
     stage.SetStartTimeCode(0)
@@ -458,7 +514,7 @@ def convert(inputs, out, states_spec=None, max_parts=None, fps=24.0):
     stage.SetEndTimeCode(max(0, frame0 - 1))
 
     t = time.perf_counter()
-    stage.GetRootLayer().Save()
+    stage.Export(out)
     print(f"[t] saved in {time.perf_counter() - t:.1f}s -> wrote {out} "
           f"({frame0} frames from {len(inputs)} d3plot famil{'ies' if multi else 'y'})")
 
@@ -485,6 +541,22 @@ def _selfcheck():
     assert list(sph_widths(np.array([1., 2., 3.]), "static", 0, np.array([2, 1]))) == [6.0, 4.0]
     assert list(sph_widths(np.array([0.5, 1.5]), "state", 1, np.array([0, 0, 0]))) == [3.0, 3.0, 3.0]
     assert sph_widths(None, None, 0, np.array([0])) is None
+
+    # beams: Y junction (0-1-2, 1-3) + closed triangle loop (4-5-6) + reversed pair
+    pr = np.array([[0, 1], [2, 1], [1, 3], [4, 5], [5, 6], [6, 4], [7, 8], [8, 9]])
+    nodes, seg = beam_chains(pr)
+    assert (seg >= 0).sum() == len(pr) and sorted(seg[seg >= 0]) == list(range(len(pr)))
+    for i in np.flatnonzero(seg >= 0):                       # every link is a real segment
+        assert {nodes[i], nodes[i + 1]} == set(pr[seg[i]])
+    keep, counts = live_curves(seg)
+    assert keep.all() and counts.sum() == len(nodes) and (counts >= 2).all()
+    assert len(counts) == 5           # 3 branches at the junction + 1 loop + 7-8-9 chain
+    dead = np.ones(len(pr), bool); dead[7] = False           # erode 8-9 off the 7-8-9 chain
+    keep, counts = live_curves(seg, dead)
+    assert len(counts) == 5 and counts.sum() == keep.sum()   # 7-8-9 -> 7-8 only
+    dead[6] = False                                          # 7-8-9 fully gone
+    keep, counts = live_curves(seg, dead)
+    assert len(counts) == 4 and (counts >= 2).all()
 
     with tempfile.TemporaryDirectory() as d:
         try:
