@@ -17,7 +17,7 @@ commit**, gitignored).
 ```
 py -3.11 converter\d3plot_to_usd_lasso.py <path\d3plot> -o out.usdc
 py -3.11 converter\d3plot_to_usd_lasso.py                 # self-check, must print "selfcheck ok"
-"C:\Program Files\Blender Foundation\Blender 5.1blender.exe" -b --factory-startup --python blender\dyna_import.py   # "blender selfcheck ok"
+"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" -b --factory-startup --python blender\dyna_import.py   # "blender selfcheck ok"
 ```
 Test data: `data\d3plot_car\d3plot`, `data\d3plot_wiremesh\d3plot`.
 
