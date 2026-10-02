@@ -12,7 +12,8 @@ beams and SPH — then a Blender toolbox to light, shade, optimise and render th
 |-------|-------|
 | `converter/d3plot_to_usd_lasso.py` — d3plot → animated USD | **working** |
 | `blender/dyna_import.py` — import + beam radius node group | **working** |
-| Blender toolbox (materials, studio deck, render presets) | planned — see `PROJECT.md` |
+| `blender/look.py` — look creator: `studio`, `fe` (LS-PrePost style) | **working** |
+| Blender toolbox (material library by part rules, camera rigs, batch render) | planned — see `PROJECT.md` |
 
 ## Quick start
 
@@ -56,6 +57,25 @@ Imports the stage (frame range from the file) and sets up the beams:
 - `--fields` results arrive as attributes (`von_mises`, `plastic_strain` per face,
   `displacement` per point) for an Attribute node → Color Ramp material.
 - Motion blur works out of the box in Cycles (Blender samples the USD between frames).
+
+### Looks
+
+```bat
+:: FE post-processor look: banded JET9 fringe, legend, grey rigid parts, element lines
+blender -b --python blender\look.py -- --usd crash.usdc --look fe --field von_mises --out crash_fe.blend --render fe.png
+
+:: photoreal studio: cyclorama, 3 area lights, satin part colours, metal rigid parts/beams
+blender -b --python blender\look.py -- --usd crash.usdc --look studio --out crash_studio.blend --render studio.png
+
+:: or apply a look to an already-imported .blend
+blender -b crash.blend --python blender\look.py -- --look fe --field plastic_strain --out crash_fe.blend
+```
+
+Useful options: `--view iso|iso2|+x|-x|+y|-y|top`, `--fit all|frame` (whole animation vs
+the rendered frame only), `--legend-max` / `--legend-pct` (default: 99.5th percentile over
+the animation, rounded to a clean number), `--lines auto|on|off`, `--res`, `--samples`,
+`--engine cycles|eevee`, `--radius` (beam mm). `--help` lists all. New looks: write
+`build_<name>(ctx, args)` and add it to `LOOKS`.
 
 **Playback tip:** use the Vulkan backend (Preferences → System → Backend), measured
 +25–70 % viewport fps on deforming crash meshes.

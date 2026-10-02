@@ -84,6 +84,7 @@ def curve_display(scene):
 
 
 def import_dyna(path, radius=None):
+    path = os.path.abspath(path)                             # importer resolves relative paths oddly
     bpy.ops.wm.usd_import(filepath=path)                     # sets frame range from stage
     scene = bpy.context.scene
     curve_display(scene)

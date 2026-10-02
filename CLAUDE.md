@@ -35,6 +35,11 @@ Test data: `data\d3plot_car\d3plot`, `data\d3plot_wiremesh\d3plot`.
   essentials "Curve to Tube" group with Scale 1 (its default 0.1 shrinks them).
 - Don't author USD `velocities`: tested, Cycles blur is identical without them
   (Blender samples the cache between time samples).
+- `blender/look.py`: rigid = edge lengths unchanged to 1e-5 (LS-DYNA rigid parts are
+  exactly 0; elastic car parts are 1e-4..1e-2 and must keep their fringe). Framing uses
+  deforming parts only (sim grounds/rails can be 50-100 m). FE legend max = clean-rounded
+  99.5th percentile: the true max (one hot element) turns the whole fringe blue.
+- Check every look change by rendering a 960x540 still and looking at it.
 - Viewport playback is bound by Blender redrawing deforming meshes (~200 ns/tri), not
   by USD reading. Merging parts into one mesh was tested and is slower (single-thread
   eval) — don't retry it.

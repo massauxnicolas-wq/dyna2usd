@@ -53,8 +53,13 @@ into one mesh made eval single-threaded (171 ms) — no gain, rejected.
 - [x] Import helper (`blender/dyna_import.py`): USD import, frame range from the stage.
 - [ ] Material library: car paint, glass, rubber, metal, plastic — assign by part name
       rules (regex → material), config file per model.
-- [ ] Studio deck: cyclorama / infinite floor, HDRI + 3-point lights, camera rigs
-      (turntable, impact close-up, side/top), one-click scene build.
+- [x] Look creator (`blender/look.py --look studio|fe`): cyclorama + 3 area lights +
+      satin/metal materials; FE look (JET9 fringe, headlight+AO shade, element lines,
+      grey rigid parts, studio gradient, stepped legend). Data-driven: rigid parts,
+      framing, legend max, line radius.
+- [ ] FE look, film features: FE_Switch beauty↔FE wipe, BG_Mask, HUD scene (legend with
+      DOF), fe_grey per-object fade, live value lines.
+- [ ] Camera rigs: turntable, impact close-up; HDRI option for studio.
 - [x] Beam radius: "Dyna Beam" node group + built-in Curve to Tube (off by default);
       scene curve display fixed so radius shows in EEVEE/viewport.
 - [ ] SPH point radius setup.
