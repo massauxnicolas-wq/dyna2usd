@@ -10,14 +10,22 @@ converter internals.
 - Blender scripts run inside Blender's own Python (`bpy`), not `py -3.11`.
 
 ## Layout
-`converter/` (d3plot → animated USD, the core) · `blender/` (bpy scripts, Blender 5.1) · `data/` (14 GB test results, **never
-commit**, gitignored).
+- `converter/d3plot_to_usd_lasso.py` — d3plot → animated USD + result fields (the core).
+- `blender/` (Blender 5.1, bpy): `dyna_import.py` (import + beam radius), `look.py`
+  (looks: studio, fe), `field.py` (switchable result field GN modifier),
+  `wire_energy.py` (wire energy proxy).
+- `docs/img/` — gallery JPGs referenced by README (small, versioned).
+- `data/` — 14 GB test results and renders, **never commit**, gitignored.
 
 ## Commands
 ```
-py -3.11 converter\d3plot_to_usd_lasso.py <path\d3plot> -o out.usdc
+py -3.11 converter\d3plot_to_usd_lasso.py <path\d3plot> -o out.usdc [--fields ...] [--parts ...]
 py -3.11 converter\d3plot_to_usd_lasso.py                 # self-check, must print "selfcheck ok"
-"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" -b --factory-startup --python blender\dyna_import.py   # "blender selfcheck ok"
+set B="C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
+%B% -b --factory-startup --python blender\dyna_import.py  # "blender selfcheck ok"
+%B% -b --factory-startup --python blender\field.py        # "field selfcheck ok"
+%B% -b --factory-startup --python blender\look.py         # "look selfcheck ok"
+%B% -b --factory-startup --python blender\look.py -- --usd x.usdc --look fe --res 960 540 --render t.png
 ```
 Test data: `data\d3plot_car\d3plot`, `data\d3plot_wiremesh\d3plot`.
 

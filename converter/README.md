@@ -139,8 +139,12 @@ Three face-producing element types are processed:
 | Element | Face rule |
 |---------|-----------|
 | **shell** (`poly`) | one polygon — the element's own connectivity, deduped. |
-| **solid** (`hex`) | six quad faces from the hex8 face table `_HEX`. |
+| **solid** (`hex`) | six quad faces from the hex8 face table `_HEX`, then interior ones removed. |
 | **tshell** (`hex`) | same six-quad hex treatment. |
+
+After `--parts` / `--exclude` selection, `interior_faces` drops every hex face shared by
+two elements (same node set) — unless one of its owners ever erodes, since the face then
+becomes exterior mid-run.
 
 Each face is a list of **global** node indices, filed under its part id, and paired
 with its `(element-type, element-index)` origin so erosion can find it later.
@@ -180,6 +184,13 @@ For each selected state → frame:
   Eroding parts re-cut the chains per frame (`live_curves`): a dead segment splits its
   curve, 1-point leftovers drop. Wiremesh: 1.56M beams → 10k curves, file 1.95 → 1.01
   GB, frame writing 32 → 15 s.
+- **Fields** (`--fields`): meshes get `uniform` (per face) primvars from their element
+  (`von_mises`, `plastic_strain`, filtered by the same erosion mask as the faces) and
+  `vertex` `displacement`. Beams compute per segment, then put the value on chain nodes
+  with `seg_to_nodes` (max of the 1-2 touching segments; mean for the signed
+  `axial_force` / `axial_work`). `axial_work` is precomputed once over **all** states:
+  Σ ½(Fₛ+Fₛ₋₁)(Lₛ−Lₛ₋₁) per beam (`axial_work()`), so a `--states` slice still shows
+  the energy absorbed since t = 0.
 
 ### 5.6 Save
 The stage is authored **in memory** (`Usd.Stage.CreateInMemory()`) and written once
@@ -201,11 +212,11 @@ the output:
   prims** — the curves would then lose `/sim`'s 1e-3 scale and come in 1000× too big.
 - **Beam widths** are a constant `1.0` (= 1 mm pre-scale) primvar, overridden in
   Blender by the "Dyna Beam" node group's Radius (`blender/dyna_import.py`).
-- **Result fields reduce integration points by max** (`elem_field`) — the usual
-  fringe-plot choice; mid-surface / outer-fibre selection is the upgrade path. Solid
-  faces take their element's value (6 faces, same value). Beam element results
-  (axial force/stress) aren't exported yet: curves are chains of many segments, so
-  they'd need per-vertex averaging.
+- **Result fields reduce integration points by max** (`elem_field`, `beam_field`) — the
+  usual fringe-plot choice; mid-surface / outer-fibre selection is the upgrade path.
+  Solid faces take their element's value. Beam von Mises = √(σ_axial² + 3(τ₁² + τ₂²))
+  per integration point. `axial_work` is axial only (bending/torsion work would need
+  beam moments and rotations); elastic unloading returns work, so it can dip.
 - **No velocities authored, on purpose.** Tested: Cycles motion blur on the imported
   cache comes from Blender sampling the USD between time samples, and is identical
   with or without a `velocities` attribute — authoring them only doubled the data.
@@ -229,19 +240,26 @@ the output:
 A healthy run prints, in order:
 
 ```
-[t] d3plot loaded in …s
-lasso: <n> shells, <n> solids, <n> tshells, <n> parts, <n> states
-has_element_deletion_data=<bool>  has_node_deletion_data=<bool>
+[t] '<path>' loaded in …s
+--- d3plot summary ---------------------------------
+  states  :           50
+  parts   :        1,725
+  shells / solids / tshells / beams / sph : counts
+  deletion: elements=yes  nodes=no
+----------------------------------------------------
+dropped <n> interior solid faces
 built <n> part meshes
 built <n> beam curve prims (<n> beams -> <n> curves)
 [t] geometry processed in …s
   frame 0 (state 0) done in …s
   …
-[t] saved in …s -> wrote <out>
+[t] saved in …s -> wrote <out> (<n> frames from 1 d3plot family)
 ```
 
 Watch for:
-- `has_element_deletion_data=False` → **no erosion possible**; if you expected failed
+- `note: field <name> not in this d3plot; skipped` → that result wasn't written by the
+  solver (check `*DATABASE_EXTENT_BINARY`).
+- `deletion: elements=no` → **no erosion possible**; if you expected failed
   elements to vanish, the flag wasn't written to the d3plot (a solver output setting).
 - `note: <type> is_alive shape … != n_<type> …; erosion skipped` → a shape mismatch;
   that element type won't erode. Investigate before trusting the animation.
