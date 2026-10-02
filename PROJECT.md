@@ -41,8 +41,9 @@ into one mesh made eval single-threaded (171 ms) — no gain, rejected.
 ## Roadmap
 
 ### Converter
-- [ ] Result fields as primvars (von Mises, plastic strain, displacement) → colour-by-result
-      renders in Blender.
+- [x] Result fields as primvars (`--fields von_mises,plastic_strain,displacement`).
+- [ ] Beam element results (axial force/stress) as per-vertex primvars.
+- [ ] Blender: colour-by-result material (Attribute → Color Ramp) with fixed legend range.
 - [ ] Exterior-only faces for solids (currently all 6 hex faces → interior duplicates).
 - [ ] Part selection by id / name filter (replace the debug-only `--max-parts`).
 - [ ] Proper `pip install` package + CLI entry point (`dyna2usd ...`).
@@ -54,7 +55,8 @@ into one mesh made eval single-threaded (171 ms) — no gain, rejected.
       rules (regex → material), config file per model.
 - [ ] Studio deck: cyclorama / infinite floor, HDRI + 3-point lights, camera rigs
       (turntable, impact close-up, side/top), one-click scene build.
-- [x] Beam radius: "Dyna Beam" node group, native curves or tube mesh.
+- [x] Beam radius: "Dyna Beam" node group + built-in Curve to Tube (off by default);
+      scene curve display fixed so radius shows in EEVEE/viewport.
 - [ ] SPH point radius setup.
 - [ ] Optimisation: decimate / hide internal parts, instance static parts, smooth
       shading + auto-smooth, mesh cache (Alembic / USD) streaming for big models.

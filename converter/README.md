@@ -55,6 +55,7 @@ id). A single family (one argument) is built flat under `/sim` exactly as before
 | `--states` | all | 1-based **inclusive** slice `LO:HI`, e.g. `1:6` = states 1‑6. Open ends allowed (`:10`, `3:`). Applied **per family**; each family's slice is appended to the shared timeline. |
 | `--max-parts` | all | Keep only the first N parts (in discovery order). Debug/preview knob — **not** a stable selection, order is not part-ID sorted. |
 | `--fps` | `24.0` | Sets both `timeCodesPerSecond` and `framesPerSecond` on the stage. One state → one frame → one time code. |
+| `--fields` | none | Comma list of result primvars, time-sampled per frame: `von_mises`, `plastic_strain` (per face, `uniform`, max over integration layers) and `displacement` (per vertex, magnitude from the first authored state; also on beams). Blender imports them as attributes → drive colour with an Attribute node. |
 
 ---
 
@@ -83,6 +84,10 @@ A single stage, Z-up, seconds-based timeline:
 ├── /sim/<PartTitle>        Mesh   ← one per part. Shells + solids + tshells.
 │                                     points (+ extent) time-sampled every frame.
 │                                     Eroding parts also time-sample topology.
+│                                     subdivisionScheme = none (unset = catmullClark:
+│                                     usdview/Karma/Omniverse would subdivide).
+│                                     primvars:von_mises|plastic_strain|displacement
+│                                     with --fields.
 ├── /sim/beams              Xform  ← typed on purpose (see §6, "beams").
 │   └── /sim/beams/<PartTitle>  BasisCurves (linear)  ← beams joined into polylines.
 ├── /sim/sph                Xform  ← typed on purpose (see §6, "beams").
@@ -195,6 +200,14 @@ the output:
   prims** — the curves would then lose `/sim`'s 1e-3 scale and come in 1000× too big.
 - **Beam widths** are a constant `1.0` (= 1 mm pre-scale) primvar, overridden in
   Blender by the "Dyna Beam" node group's Radius (`blender/dyna_import.py`).
+- **Result fields reduce integration points by max** (`elem_field`) — the usual
+  fringe-plot choice; mid-surface / outer-fibre selection is the upgrade path. Solid
+  faces take their element's value (6 faces, same value). Beam element results
+  (axial force/stress) aren't exported yet: curves are chains of many segments, so
+  they'd need per-vertex averaging.
+- **No velocities authored, on purpose.** Tested: Cycles motion blur on the imported
+  cache comes from Blender sampling the USD between time samples, and is identical
+  with or without a `velocities` attribute — authoring them only doubled the data.
 - **Light intensities** are eyeballed for usdview/Blender and may need tuning per
   renderer.
 - **Beam orientation nodes ignored** — only the two end nodes (cols 0,1) of each beam

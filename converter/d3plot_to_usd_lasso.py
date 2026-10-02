@@ -72,6 +72,42 @@ ELEM = [
 ]
 
 
+# result fields -> per-face (uniform) primvars, one array key per ELEM type (same order)
+FIELDS = {
+    "von_mises":      [AT.element_shell_stress, AT.element_solid_stress, AT.element_tshell_stress],
+    "plastic_strain": [AT.element_shell_effective_plastic_strain,
+                       AT.element_solid_effective_plastic_strain,
+                       AT.element_tshell_effective_plastic_strain],
+}
+FIELD_CHOICES = list(FIELDS) + ["displacement"]          # displacement: per-vertex, from coords
+
+
+def von_mises(sig):
+    """(..., 6) stress [xx, yy, zz, xy, yz, zx] -> von Mises equivalent stress."""
+    xx, yy, zz, xy, yz, zx = np.moveaxis(sig, -1, 0)
+    return np.sqrt(0.5 * ((xx - yy) ** 2 + (yy - zz) ** 2 + (zz - xx) ** 2)
+                   + 3.0 * (xy ** 2 + yz ** 2 + zx ** 2))
+
+
+def elem_field(arr, name, s):
+    """Per-element scalar for state s, one array per ELEM type (None if absent).
+    Through-thickness / integration points reduced by max (the usual fringe plot).
+    ponytail: max over layers only; add mid/outer-surface choice if anyone asks."""
+    out = []
+    for key in FIELDS[name]:
+        a = arr.get(key)
+        if a is None:
+            out.append(None)
+            continue
+        v = np.asarray(a[s], dtype=np.float32)
+        if name == "von_mises":
+            v = von_mises(v)
+        while v.ndim > 1:
+            v = v.max(axis=1)
+        out.append(v)
+    return out
+
+
 def dedup(seq):
     """Order-preserving unique — collapses d3plot degenerate elements (tri stored
     as [a,b,c,c], tet as hex8 with repeats) to their real face."""
@@ -216,7 +252,8 @@ def parse_states(spec, n):
     return list(range(max(0, lo), min(n, hi)))
 
 
-def build_family(stage, path, scope, frame0, states_spec=None, max_parts=None):
+def build_family(stage, path, scope, frame0, states_spec=None, max_parts=None,
+                 fields=()):
     """Load one d3plot family and build all its geometry under `scope`, authoring
     every time sample at frame0+frame. Returns the number of frames authored.
     A full-restart chain calls this once per family with its own scope + cumulative
@@ -283,6 +320,10 @@ def build_family(stage, path, scope, frame0, states_spec=None, max_parts=None):
 
     # typed family group; convert() gates its visibility to this family's window
     UsdGeom.Xform.Define(stage, scope)
+    elem_fields = [f for f in fields if f in FIELDS and any(arr.get(k) is not None for k in FIELDS[f])]
+    for f in fields:
+        if f in FIELDS and f not in elem_fields:
+            print(f"  note: field {f} not in this d3plot; skipped")
     built = []
     for pid in pids:
         p = parts[pid]
@@ -296,6 +337,8 @@ def build_family(stage, path, scope, frame0, states_spec=None, max_parts=None):
 
         m = UsdGeom.Mesh.Define(stage, f"{scope}/{pnames[pid]}")   # real part title as prim name
         m.CreateDoubleSidedAttr(True)
+        # explicit: unset means catmullClark -> usdview/Karma/Omniverse would subdivide
+        m.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
         rgb = part_color(pid)
         m.CreateDisplayColorAttr([rgb])                      # viewport fallback
         UsdShade.MaterialBindingAPI.Apply(m.GetPrim()).Bind(make_material(stage, scope, pid, rgb))
@@ -304,8 +347,17 @@ def build_family(stage, path, scope, frame0, states_spec=None, max_parts=None):
             m.CreateFaceVertexIndicesAttr(Vt.IntArray.FromNumpy(flat))
         else:
             m.CreateFaceVertexCountsAttr(); m.CreateFaceVertexIndicesAttr()
+        et_arr = np.array([et for et, _ in src])
+        e_arr = np.array([e for _, e in src])
+        pv = UsdGeom.PrimvarsAPI(m)
+        prim_fields = {f: pv.CreatePrimvar(f, Sdf.ValueTypeNames.FloatArray, UsdGeom.Tokens.uniform)
+                       for f in elem_fields}
+        if "displacement" in fields:
+            prim_fields["displacement"] = pv.CreatePrimvar(
+                "displacement", Sdf.ValueTypeNames.FloatArray, UsdGeom.Tokens.vertex)
         built.append(dict(mesh=m, used=np.array(used), faces=p["faces"], src=src,
-                          counts=counts, erodes=erodes))
+                          counts=counts, erodes=erodes, fields=prim_fields,
+                          types=[(et, et_arr == et, e_arr[et_arr == et]) for et in np.unique(et_arr)]))
     print(f"built {len(built)} part meshes")
 
     # beams -> linear BasisCurves, one prim per part under /sim/beams/part_<pid>.
@@ -356,7 +408,10 @@ def build_family(stage, path, scope, frame0, states_spec=None, max_parts=None):
             c.CreateCurveVertexCountsAttr(Vt.IntArray.FromNumpy(counts))
             c.CreatePointsAttr(Vt.Vec3fArray.FromNumpy(
                 coord_states[states[0]][nodes].astype(np.float32)))
-            beams_built.append(dict(curve=c, nodes=nodes, seg=seg, idx=idx, erodes=erodes))
+            disp = UsdGeom.PrimvarsAPI(c).CreatePrimvar(
+                "displacement", Sdf.ValueTypeNames.FloatArray, UsdGeom.Tokens.vertex) \
+                if "displacement" in fields else None
+            beams_built.append(dict(curve=c, nodes=nodes, seg=seg, idx=idx, erodes=erodes, disp=disp))
             n_curves += len(counts)
         print(f"built {len(beams_built)} beam curve prims ({bconn.shape[0]} beams "
               f"-> {n_curves} curves)")
@@ -430,13 +485,18 @@ def build_family(stage, path, scope, frame0, states_spec=None, max_parts=None):
         t = time.perf_counter()
         tc = Usd.TimeCode(frame0 + frame)                    # offset onto shared timeline
         pts_all = coord_states[s].astype(np.float32)
+        disp_all = None
+        if "displacement" in fields:
+            disp_all = np.linalg.norm(coord_states[s] - coord_states[states[0]], axis=1).astype(np.float32)
+        efv = {f: elem_field(arr, f, s) for f in elem_fields}
         for b in built:
             pts = pts_all[b["used"]]
             b["mesh"].GetPointsAttr().Set(Vt.Vec3fArray.FromNumpy(pts), tc)
             ext = np.array([pts.min(0), pts.max(0)], dtype=np.float32)
             b["mesh"].GetExtentAttr().Set(Vt.Vec3fArray.FromNumpy(ext), tc)
+            keep = None
             if b["erodes"]:
-                keep = [alive[et] is None or alive[et][s, e] for et, e in b["src"]]
+                keep = np.array([alive[et] is None or alive[et][s, e] for et, e in b["src"]], bool)
                 counts, flat = [], []
                 g2l = {g: i for i, g in enumerate(b["used"])}
                 for f, k in zip(b["faces"], keep):
@@ -445,6 +505,17 @@ def build_family(stage, path, scope, frame0, states_spec=None, max_parts=None):
                 assert sum(counts) == len(flat), "topology mismatch"
                 b["mesh"].GetFaceVertexCountsAttr().Set(Vt.IntArray.FromNumpy(np.array(counts, np.int32)), tc)
                 b["mesh"].GetFaceVertexIndicesAttr().Set(Vt.IntArray.FromNumpy(np.array(flat, np.int32)), tc)
+            for f, pvar in b["fields"].items():
+                if f == "displacement":
+                    val = disp_all[b["used"]]
+                else:
+                    val = np.zeros(len(b["src"]), np.float32)        # per face, from its element
+                    for et, mask, eidx in b["types"]:
+                        if efv[f][et] is not None:
+                            val[mask] = efv[f][et][eidx]
+                    if keep is not None:
+                        val = val[keep]                              # faces alive this frame
+                pvar.Set(Vt.FloatArray.FromNumpy(val), tc)
         for b in beams_built:
             nodes = b["nodes"]
             if b["erodes"]:
@@ -454,6 +525,8 @@ def build_family(stage, path, scope, frame0, states_spec=None, max_parts=None):
             # BasisCurves has no index array: points listed per curve, consumed by counts
             pts = pts_all[nodes]
             b["curve"].GetPointsAttr().Set(Vt.Vec3fArray.FromNumpy(pts), tc)
+            if b["disp"]:
+                b["disp"].Set(Vt.FloatArray.FromNumpy(disp_all[nodes]), tc)
             if len(pts):
                 ext = np.array([pts.min(0), pts.max(0)], dtype=np.float32)
                 b["curve"].GetExtentAttr().Set(Vt.Vec3fArray.FromNumpy(ext), tc)
@@ -474,7 +547,8 @@ def build_family(stage, path, scope, frame0, states_spec=None, max_parts=None):
     return len(states)
 
 
-def convert(inputs, out, states_spec=None, max_parts=None, fps=24.0):
+def convert(inputs, out, states_spec=None, max_parts=None, fps=24.0,
+            fields=()):
     """Build one USD stage from one or more d3plot families (restart chain in order).
     Each family occupies a slice of the shared timeline and, when there is more than
     one, is gated to that slice by time-sampled visibility -- so a full restart plays
@@ -501,7 +575,8 @@ def convert(inputs, out, states_spec=None, max_parts=None, fps=24.0):
     frame0 = 0
     for i, path in enumerate(inputs):
         scope = f"/sim/run{i}" if multi else "/sim"          # single family stays flat
-        n = build_family(stage, path, scope, frame0, states_spec, max_parts)
+        n = build_family(stage, path, scope, frame0, states_spec, max_parts,
+                         fields)
         if multi:
             # object "life": show this family only during [frame0, frame0+n). visibility
             # is a held token, so authoring invisible->inherited->invisible is enough.
@@ -558,6 +633,16 @@ def _selfcheck():
     keep, counts = live_curves(seg, dead)
     assert len(counts) == 4 and (counts >= 2).all()
 
+    assert abs(von_mises(np.array([100., 0, 0, 0, 0, 0])) - 100) < 1e-9          # uniaxial
+    assert abs(von_mises(np.array([0., 0, 0, 50, 0, 0])) - 50 * 3 ** 0.5) < 1e-9  # pure shear
+    assert abs(von_mises(np.array([7., 7, 7, 0, 0, 0]))) < 1e-9                   # hydrostatic
+    st = {AT.element_shell_stress: np.zeros((2, 3, 2, 6)), AT.element_shell_effective_plastic_strain:
+          np.array([[[0.1, 0.3], [0, 0], [0.2, 0.1]]] * 2)}
+    st[AT.element_shell_stress][1, 0, 1, 0] = 100.0                  # state 1, elem 0, layer 1
+    vm = elem_field(st, "von_mises", 1)
+    assert vm[1] is None and list(vm[0]) == [100, 0, 0]              # max over layers, no solids
+    assert np.allclose(elem_field(st, "plastic_strain", 0)[0], [0.3, 0, 0.2])
+
     with tempfile.TemporaryDirectory() as d:
         try:
             check_paths([os.path.join(d, "nope", "d3plot")], os.path.join(d, "o.usdc")); assert False
@@ -578,8 +663,14 @@ if __name__ == "__main__":
     ap.add_argument("--states", help="1-based inclusive slice, e.g. 1:6 (applied per family)")
     ap.add_argument("--max-parts", type=int)
     ap.add_argument("--fps", type=float, default=24.0)
+    ap.add_argument("--fields", default="",
+                    help=f"comma list of result primvars: {','.join(FIELD_CHOICES)}")
     a = ap.parse_args()
     if not a.d3plot:
         _selfcheck()
     else:
-        convert(a.d3plot, a.out, a.states, a.max_parts, a.fps)
+        fields = [f for f in a.fields.split(",") if f]
+        bad = set(fields) - set(FIELD_CHOICES)
+        if bad:
+            ap.error(f"unknown --fields {sorted(bad)}; choose from {FIELD_CHOICES}")
+        convert(a.d3plot, a.out, a.states, a.max_parts, a.fps, fields)

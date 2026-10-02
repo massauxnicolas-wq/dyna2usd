@@ -30,8 +30,11 @@ Test data: `data\d3plot_car\d3plot`, `data\d3plot_wiremesh\d3plot`.
 - Part colours seeded by part key — must stay stable across runs/restart families.
 - Erosion: skip (with a printed note) on shape mismatch, never guess the mapping.
 - Run the self-check after any converter change.
-- Blender 5.1 `Curve to Mesh` does NOT scale the profile by curve radius by itself:
-  the `Radius` field node must feed its `Scale` input.
+- Blender curves: scene `render.hair_type` must be `STRIP` — the default `STRAND`
+  makes EEVEE/viewport ignore radius (Cycles still honours it). Tubes come from the
+  essentials "Curve to Tube" group with Scale 1 (its default 0.1 shrinks them).
+- Don't author USD `velocities`: tested, Cycles blur is identical without them
+  (Blender samples the cache between time samples).
 - Viewport playback is bound by Blender redrawing deforming meshes (~200 ns/tri), not
   by USD reading. Merging parts into one mesh was tested and is slower (single-thread
   eval) — don't retry it.

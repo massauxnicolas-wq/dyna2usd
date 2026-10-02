@@ -27,6 +27,9 @@ py -3.11 converter\d3plot_to_usd_lasso.py <path\d3plot> -o crash.usdc
 :: fast smoke test — states 1-6, first 5 parts
 py -3.11 converter\d3plot_to_usd_lasso.py <path\d3plot> -o t.usdc --states 1:6 --max-parts 5
 
+:: with result fields for colour-by-result renders
+py -3.11 converter\d3plot_to_usd_lasso.py <path\d3plot> -o crash.usdc --fields von_mises,plastic_strain,displacement
+
 :: full-restart chain merged on one timeline
 py -3.11 converter\d3plot_to_usd_lasso.py run\d3plot restart\d3plot -o full.usdc
 
@@ -40,10 +43,19 @@ Then into Blender 5.1+:
 blender --python blender\dyna_import.py -- crash.usdc [radius_mm]
 ```
 
-Imports the stage (frame range from the file) and gives every beam object a
-**Dyna Beam** geometry-nodes modifier: `Radius` (mm) drives the curve radius;
-native curves by default (Cycles renders round tubes), `Tube Mesh` toggles real
-geometry. Change all beams at once: select them, Alt+Enter on Radius.
+Imports the stage (frame range from the file) and sets up the beams:
+
+- **Dyna Beam** modifier — `Radius` (mm) drives the curve radius. Native curves render
+  as round tubes in Cycles and EEVEE at zero triangle cost. Change all beams at once:
+  select them, Alt+Enter on Radius.
+- **Curve to Tube** (Blender's built-in essentials modifier, Scale = Radius) — off by
+  default; enable it for real tube geometry (caps, UVs, custom profile).
+- Scene curve display set so radius shows everywhere: EEVEE/viewport `Strip`
+  (Blender's default `Strand` draws fixed thin lines and ignores radius), Cycles
+  `3D Curves`.
+- `--fields` results arrive as attributes (`von_mises`, `plastic_strain` per face,
+  `displacement` per point) for an Attribute node → Color Ramp material.
+- Motion blur works out of the box in Cycles (Blender samples the USD between frames).
 
 **Playback tip:** use the Vulkan backend (Preferences → System → Backend), measured
 +25–70 % viewport fps on deforming crash meshes.
